@@ -10,6 +10,7 @@ from whisperai.helpers.utils import get_env
 
 class WhisperAI:
     def __init__(self, model_size: str, device=None, compute_type=None) -> None:
+        # TODO: Make all these private variables.
         self.model_size = model_size
         self.device = device
         self.compute_type = compute_type   
@@ -58,19 +59,8 @@ class WhisperAI:
         
         return transcript
     
-        
-    def diarize(self, audio: str, **kwargs):
-        """
-        Segments the audio into speaker turns.
-        It uses pyannote's speaker diarization model.
-        Currently, it only supports 2 speakers, it will be extended to support more speakers in the future updates.
-        """
-        
-        OUTPUT_DIRECTORY = 'metadata'
-        os.makedirs(OUTPUT_DIRECTORY, exist_ok=True)
-        
-        dual_channel = kwargs.get('dual_channel', False)
-        
+    
+    def __diarizer(self, left_channel_path, right_channel_path, **kwargs):
         options = dict(
             word_timestamps=True,
             language = kwargs.get('language', None),
@@ -81,49 +71,6 @@ class WhisperAI:
             min_silence_duration_ms = kwargs.get('min_silence_duration_ms', 1000)
         )
         
-        diarization = self.diarization_model(audio, min_speakers=1, max_speakers=2)
-        diarization_list = list(diarization.itertracks(yield_label=True))
-
-        output = {
-            1: [],
-            2: []
-        }
-
-        for i in diarization_list:
-            speaker_label = i[2]
-            start = round(i[0].start * 1000)
-            end = round(i[0].end * 1000)
-            if speaker_label == 'SPEAKER_00':
-                output[1].append((start, end))
-            else:
-                output[2].append((start, end))
-                
-        file_extension = os.path.splitext(audio)[1].strip('.')
-        audio_format = file_extension if file_extension else "mp3"
-        mono_audio = AudioSegment.from_file(audio, format=audio_format)
-
-        # Create empty audio segments for both channels
-        left_channel = AudioSegment.silent(duration=len(mono_audio))
-        right_channel = AudioSegment.silent(duration=len(mono_audio))
-
-        # Function to insert segments into a channel
-        def insert_segments(channel, intervals, audio):
-            for start, end in intervals:
-                segment = audio[start:end]
-                channel = channel.overlay(segment, position=start)
-            return channel
-
-        # Insert audio segments into the appropriate channels
-        left_channel = insert_segments(left_channel, output[1], mono_audio)
-        right_channel = insert_segments(right_channel, output[2], mono_audio)
-
-        # Export the left and right channels to separate files
-        left_channel_path = os.path.join(OUTPUT_DIRECTORY, f'{uuid4()}_left.wav')
-        right_channel_path = os.path.join(OUTPUT_DIRECTORY, f'{uuid4()}_right.wav')
-        
-        left_channel.export(left_channel_path, format='wav')
-        right_channel.export(right_channel_path, format='wav')
-
         # Export the stereo audio file
         # stereo_audio = AudioSegment.from_mono_audiosegments(left_channel, right_channel)
         # stereo_audio.export(f"{base_file_name}_stereo.mp3", format="mp3")
@@ -159,6 +106,77 @@ class WhisperAI:
                 # Add a new entry to the merged list
                 merged_data.append(item.copy())
 
+    def diarize(self, audio: str, **kwargs):
+        """
+        Segments the audio into speaker turns.
+        It uses pyannote's speaker diarization model.
+        Currently, it only supports 2 speakers, it will be extended to support more speakers in the future updates.
+        """
+        
+        OUTPUT_DIRECTORY = 'metadata'
+        os.makedirs(OUTPUT_DIRECTORY, exist_ok=True)
+        
+        dual_channel = kwargs.get('dual_channel', False)
+        
+        if dual_channel == False:
+            diarization = self.diarization_model(audio, min_speakers=1, max_speakers=2)
+            diarization_list = list(diarization.itertracks(yield_label=True))
+
+            output = {
+                1: [],
+                2: []
+            }
+
+            for i in diarization_list:
+                speaker_label = i[2]
+                start = round(i[0].start * 1000)
+                end = round(i[0].end * 1000)
+                if speaker_label == 'SPEAKER_00':
+                    output[1].append((start, end))
+                else:
+                    output[2].append((start, end))
+                    
+            file_extension = os.path.splitext(audio)[1].strip('.')
+            audio_format = file_extension if file_extension else "mp3"
+            mono_audio = AudioSegment.from_file(audio, format=audio_format)
+
+            # Create empty audio segments for both channels
+            left_channel = AudioSegment.silent(duration=len(mono_audio))
+            right_channel = AudioSegment.silent(duration=len(mono_audio))
+
+            # Function to insert segments into a channel
+            def insert_segments(channel, intervals, audio):
+                for start, end in intervals:
+                    segment = audio[start:end]
+                    channel = channel.overlay(segment, position=start)
+                return channel
+
+            # Insert audio segments into the appropriate channels
+            left_channel = insert_segments(left_channel, output[1], mono_audio)
+            right_channel = insert_segments(right_channel, output[2], mono_audio)
+
+            left_channel.export(left_channel_path, format='wav')
+            right_channel.export(right_channel_path, format='wav')
+        else:
+            stereo_audio = AudioSegment.from_file(audio)
+            
+            # Split stereo audio into two mono tracks
+            left_channel = stereo_audio.split_to_mono()[0]
+            right_channel = stereo_audio.split_to_mono()[1]
+
+        # Export the left and right channels to separate files
+        left_channel_path = os.path.join(OUTPUT_DIRECTORY, f'{uuid4()}_left.wav')
+        right_channel_path = os.path.join(OUTPUT_DIRECTORY, f'{uuid4()}_right.wav')
+        
+        # Export each mono track to a file
+        left_channel.export("left_channel.wav", format="wav")
+        right_channel.export("right_channel.wav", format="wav")
+
+        # Call the diarizer function
+        merged_data = self.__diarizer(left_channel_path, right_channel_path, **kwargs)
+        
+        # TODO: Delete the temporary files
+        
         return merged_data
       
       
@@ -175,7 +193,7 @@ class WhisperAI:
             min_silence_duration_ms = kwargs.get('min_silence_duration_ms', 1000),
             language=kwargs.get('language', None),
             initial_prompt=kwargs.get('initial_prompt', None),
-            task=kwargs.get('task', 'transcribe'),  # Accepted tasks: transcribe, translate
+            task=kwargs.get('task', 'transcribe'),
             temperature=kwargs.get('temperature', 0)
         )
         
