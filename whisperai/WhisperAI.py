@@ -105,12 +105,16 @@ class WhisperAI:
             else:
                 # Add a new entry to the merged list
                 merged_data.append(item.copy())
+                
+        return merged_data
+
 
     def diarize(self, audio: str, **kwargs):
         """
         Segments the audio into speaker turns.
         It uses pyannote's speaker diarization model.
         Currently, it only supports 2 speakers, it will be extended to support more speakers in the future updates.
+        Drawbacks: The algorithm is not able to handle overlapping speech properly. So when there is an overlap, the output may not be accurate only for the overlapping part.
         """
         
         OUTPUT_DIRECTORY = 'metadata'
@@ -154,9 +158,6 @@ class WhisperAI:
             # Insert audio segments into the appropriate channels
             left_channel = insert_segments(left_channel, output[1], mono_audio)
             right_channel = insert_segments(right_channel, output[2], mono_audio)
-
-            left_channel.export(left_channel_path, format='wav')
-            right_channel.export(right_channel_path, format='wav')
         else:
             stereo_audio = AudioSegment.from_file(audio)
             
@@ -169,13 +170,16 @@ class WhisperAI:
         right_channel_path = os.path.join(OUTPUT_DIRECTORY, f'{uuid4()}_right.wav')
         
         # Export each mono track to a file
-        left_channel.export("left_channel.wav", format="wav")
-        right_channel.export("right_channel.wav", format="wav")
+        left_channel.export(left_channel_path, format="wav")
+        right_channel.export(right_channel_path, format="wav")
 
         # Call the diarizer function
         merged_data = self.__diarizer(left_channel_path, right_channel_path, **kwargs)
         
-        # TODO: Delete the temporary files
+        if os.path.exists(left_channel_path):
+            os.remove(left_channel_path)
+        if os.path.exists(right_channel_path):
+            os.remove(right_channel_path)
         
         return merged_data
       
